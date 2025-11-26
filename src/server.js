@@ -2,6 +2,9 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import { pool } from "./db.js";
+import OpenAI from "openai";
+import dotenv from "dotenv";
+dotenv.config();
 
 const app = express();
 app.use(cors());
@@ -21,18 +24,18 @@ app.get("/health", async (_req, res) => {
 // ---------- Articles: list with metadata ----------
 app.get("/api/articles", async (_req, res) => {
     const [rows] = await pool.query(`
-    SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
-           v.label AS version,
-           c.name  AS category,
-           m.name  AS module
-    FROM articles a
-    LEFT JOIN versions   v ON a.version_id  = v.id
-    LEFT JOIN categories c ON a.category_id = c.id
-    LEFT JOIN modules    m ON a.module_id   = m.id
-    WHERE a.status = 'published'
-    ORDER BY a.updated_at DESC
-    LIMIT 100
-  `);
+        SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
+               v.label AS version,
+               c.name  AS category,
+               m.name  AS module
+        FROM articles a
+            LEFT JOIN versions   v ON a.version_id  = v.id
+            LEFT JOIN categories c ON a.category_id = c.id
+            LEFT JOIN modules    m ON a.module_id   = m.id
+        WHERE a.status = 'published'
+        ORDER BY a.updated_at DESC
+            LIMIT 100
+    `);
     res.json(rows);
 });
 
@@ -40,14 +43,14 @@ app.get("/api/articles", async (_req, res) => {
 app.get("/api/articles/:id", async (req, res) => {
     const [rows] = await pool.query(
         `SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
-            v.label AS version,
-            a.category_id, c.name AS category,
-            a.module_id,   m.name AS module
-     FROM articles a
-     LEFT JOIN versions   v ON a.version_id = v.id
-     LEFT JOIN categories c ON a.category_id = c.id
-     LEFT JOIN modules    m ON a.module_id   = m.id
-     WHERE a.id = ?`,
+                v.label AS version,
+                a.category_id, c.name AS category,
+                a.module_id,   m.name AS module
+         FROM articles a
+             LEFT JOIN versions   v ON a.version_id = v.id
+             LEFT JOIN categories c ON a.category_id = c.id
+             LEFT JOIN modules    m ON a.module_id   = m.id
+         WHERE a.id = ?`,
         [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: "Not found" });
@@ -73,27 +76,26 @@ app.post("/api/articles", async (req, res) => {
     try {
         const [r] = await pool.execute(
             `INSERT INTO articles (title, summary, source_url, version_id, status, category_id, module_id)
-       VALUES (:title, :summary, :source_url, :version_id, :status, :category_id, :module_id)`,
+             VALUES (:title, :summary, :source_url, :version_id, :status, :category_id, :module_id)`,
             { title, summary, source_url, version_id, status, category_id, module_id }
         );
 
         const newId = r.insertId;
         const [rows] = await pool.query(
             `SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
-              v.label AS version,
-              a.category_id, c.name AS category,
-              a.module_id,   m.name AS module
-       FROM articles a
-       LEFT JOIN versions   v ON a.version_id = v.id
-       LEFT JOIN categories c ON a.category_id = c.id
-       LEFT JOIN modules    m ON a.module_id   = m.id
-       WHERE a.id = ?`,
+                    v.label AS version,
+                    a.category_id, c.name AS category,
+                    a.module_id,   m.name AS module
+             FROM articles a
+                 LEFT JOIN versions   v ON a.version_id = v.id
+                 LEFT JOIN categories c ON a.category_id = c.id
+                 LEFT JOIN modules    m ON a.module_id   = m.id
+             WHERE a.id = ?`,
             [newId]
         );
 
         res.status(201).location(`/api/articles/${newId}`).json(rows[0]);
     } catch (err) {
-        // Mapea error de FK a 400
         if (err?.code === 'ER_NO_REFERENCED_ROW_2' || err?.errno === 1452) {
             return res.status(400).json({ error: "FK inválida en version_id/category_id/module_id" });
         }
@@ -119,14 +121,14 @@ app.put("/api/articles/:id", async (req, res) => {
 
         const [rows] = await pool.query(
             `SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
-              v.label AS version,
-              a.category_id, c.name AS category,
-              a.module_id,   m.name AS module
-       FROM articles a
-       LEFT JOIN versions   v ON a.version_id = v.id
-       LEFT JOIN categories c ON a.category_id = c.id
-       LEFT JOIN modules    m ON a.module_id   = m.id
-       WHERE a.id = ?`,
+                    v.label AS version,
+                    a.category_id, c.name AS category,
+                    a.module_id,   m.name AS module
+             FROM articles a
+                 LEFT JOIN versions   v ON a.version_id = v.id
+                 LEFT JOIN categories c ON a.category_id = c.id
+                 LEFT JOIN modules    m ON a.module_id   = m.id
+             WHERE a.id = ?`,
             [req.params.id]
         );
         res.json(rows[0]);
@@ -160,10 +162,10 @@ app.get("/api/tags", async (_req, res) => {
 app.get("/api/articles/:id/tags", async (req, res) => {
     const [rows] = await pool.query(
         `SELECT t.id, t.name
-     FROM article_tags at
-     JOIN tags t ON t.id = at.tag_id
-     WHERE at.article_id = ?
-     ORDER BY t.name`,
+         FROM article_tags at
+         JOIN tags t ON t.id = at.tag_id
+         WHERE at.article_id = ?
+         ORDER BY t.name`,
         [req.params.id]
     );
     res.json(rows);
@@ -178,6 +180,70 @@ app.get("/api/faqs", async (req, res) => {
     sql += " ORDER BY created_at DESC";
     const [rows] = await pool.query(sql, params);
     res.json(rows);
+});
+
+// ---------- AI Assistant ----------
+const client = new OpenAI({
+    apiKey: process.env.OPENAI_KEY
+});
+
+app.post("/ai/query", async (req, res) => {
+    try {
+        const { message } = req.body;
+
+        if (!message || message.trim() === "") {
+            return res.status(400).json({ error: "Message is required" });
+        }
+
+        // 1️⃣ Detectar idioma
+        const detection = await client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "system",
+                    content:
+                        "Detect the user's language. Respond ONLY with 'es' or 'en'."
+                },
+                {
+                    role: "user",
+                    content: message
+                }
+            ]
+        });
+
+        const lang = detection.choices?.[0]?.message?.content?.trim() === "en" ? "en" : "es";
+
+        // 2️⃣ Responder en ese idioma
+        const completion = await client.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: `
+You are the official assistant of the Cognos Knowledge Hub.
+
+RULES:
+- Always respond ONLY in ${lang}.
+- Keep answers short, clear, and direct.
+- Be professional, friendly, and helpful.
+- If asked about Cognos / IBM / CKH / configuration issues, answer accurately.
+- Never switch languages unless the user switches.
+`
+                },
+                {
+                    role: "user",
+                    content: message
+                }
+            ]
+        });
+
+        const reply = completion.choices?.[0]?.message?.content || "No response received";
+        res.json({ reply });
+
+    } catch (error) {
+        console.error("AI Error:", error);
+        res.status(500).json({ error: "Error communicating with AI" });
+    }
 });
 
 // ---------- Start ----------
