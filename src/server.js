@@ -24,10 +24,10 @@ app.get("/health", async (_req, res) => {
 });
 
 /* ============================================================
-   ARTICLES — LIST, GET, CREATE, UPDATE, DELETE
+   ARTICLES — LIST, SEARCH, GET, CREATE, UPDATE, DELETE
    ============================================================ */
 
-// 🔍 List articles
+// 🔍 List articles (NO TOCADO)
 app.get("/api/articles", async (_req, res) => {
     const [rows] = await pool.query(`
         SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
@@ -45,7 +45,67 @@ app.get("/api/articles", async (_req, res) => {
     res.json(rows);
 });
 
-// 🔍 Article detail
+/* ============================================================
+   🔥 SEARCH — SE MUEVE ARRIBA DEL :id
+   ============================================================ */
+app.get("/api/articles/search", async (req, res) => {
+    const keyword  = (req.query.keyword  || "").trim().toLowerCase();
+    const version  = (req.query.version  || "").trim();
+    const category = (req.query.category || "").trim();
+    const module   = (req.query.module   || "").trim();
+
+    let sql = `
+        SELECT 
+            a.id, a.title, a.summary, a.source_url, a.updated_at,
+            v.label AS version,
+            c.name AS category,
+            m.name AS module
+        FROM articles a
+        LEFT JOIN versions v ON a.version_id = v.id
+        LEFT JOIN categories c ON a.category_id = c.id
+        LEFT JOIN modules m ON a.module_id = m.id
+        WHERE a.status = 'published'
+    `;
+
+    const params = [];
+
+    if (keyword) {
+        sql += ` AND (
+            LOWER(a.title) LIKE ?
+            OR LOWER(a.summary) LIKE ?
+        )`;
+        params.push(`%${keyword}%`, `%${keyword}%`);
+    }
+
+    if (version && version !== "All") {
+        sql += ` AND v.label = ?`;
+        params.push(version);
+    }
+
+    if (category && category !== "All") {
+        sql += ` AND c.name = ?`;
+        params.push(category);
+    }
+
+    if (module && module !== "All") {
+        sql += ` AND m.name = ?`;
+        params.push(module);
+    }
+
+    sql += " ORDER BY a.updated_at DESC LIMIT 100";
+
+    try {
+        const [rows] = await pool.query(sql, params);
+        res.json(rows);
+    } catch (err) {
+        console.error("Search error:", err);
+        res.status(500).json({ error: "Search failed", detail: String(err) });
+    }
+});
+
+/* ============================================================
+   🔍 Article detail — AHORA VIENE DESPUÉS DEL SEARCH
+   ============================================================ */
 app.get("/api/articles/:id", async (req, res) => {
     const [rows] = await pool.query(
         `SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
@@ -64,7 +124,7 @@ app.get("/api/articles/:id", async (req, res) => {
     res.json(rows[0]);
 });
 
-// 📝 Create
+// 📝 CREATE (NO TOCADO)
 app.post("/api/articles", async (req, res) => {
     const {
         title,
@@ -110,7 +170,7 @@ app.post("/api/articles", async (req, res) => {
     }
 });
 
-// 🛠 Update
+// 🛠 UPDATE (NO TOCADO)
 app.put("/api/articles/:id", async (req, res) => {
     const allowed = [
         "title", "summary", "source_url",
@@ -153,7 +213,7 @@ app.put("/api/articles/:id", async (req, res) => {
     }
 });
 
-// 🗑 Delete
+// 🗑 DELETE (NO TOCADO)
 app.delete("/api/articles/:id", async (req, res) => {
     const [r] = await pool.execute(
         `DELETE FROM articles WHERE id = :id`,
@@ -164,7 +224,7 @@ app.delete("/api/articles/:id", async (req, res) => {
 });
 
 /* ============================================================
-   CATEGORIES, TAGS, FAQS
+   CATEGORIES, TAGS, FAQS (NO TOCADO)
    ============================================================ */
 
 app.get("/api/categories", async (_req, res) => {
@@ -206,7 +266,25 @@ app.get("/api/faqs", async (req, res) => {
 });
 
 /* ============================================================
-   AUTOCOMPLETE (Dynamic Suggestions from DB)
+   VERSIONS & MODULES (NO TOCADO)
+   ============================================================ */
+
+app.get("/api/versions", async (_req, res) => {
+    const [rows] = await pool.query(
+        "SELECT id, label FROM versions ORDER BY id"
+    );
+    res.json(rows);
+});
+
+app.get("/api/modules", async (_req, res) => {
+    const [rows] = await pool.query(
+        "SELECT id, name FROM modules ORDER BY name"
+    );
+    res.json(rows);
+});
+
+/* ============================================================
+   AUTOCOMPLETE (NO TOCADO)
    ============================================================ */
 
 app.get("/api/suggestions", async (req, res) => {
@@ -226,7 +304,7 @@ app.get("/api/suggestions", async (req, res) => {
 });
 
 /* ============================================================
-   AI — HUGO (Cognos-only Virtual Assistant)
+   AI — HUGO (NO TOCADO)
    ============================================================ */
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_KEY });
@@ -264,7 +342,7 @@ IDENTITY
 STYLE
 - Be clear, concise, friendly and practical.
 - When useful, provide step-by-step troubleshooting and mention relevant logs/config files or components.
-                    `
+`
                 },
                 { role: "user", content: message }
             ]
