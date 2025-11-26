@@ -11,7 +11,9 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan("dev"));
 
-// ---------- Health ----------
+/* ============================================================
+   HEALTH CHECK
+   ============================================================ */
 app.get("/health", async (_req, res) => {
     try {
         const [r] = await pool.query("SELECT 1 AS ok");
@@ -21,17 +23,21 @@ app.get("/health", async (_req, res) => {
     }
 });
 
-// ---------- Articles: list with metadata ----------
+/* ============================================================
+   ARTICLES — LIST, GET, CREATE, UPDATE, DELETE
+   ============================================================ */
+
+// 🔍 List articles
 app.get("/api/articles", async (_req, res) => {
     const [rows] = await pool.query(`
         SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
                v.label AS version,
-               c.name  AS category,
-               m.name  AS module
+               c.name AS category,
+               m.name AS module
         FROM articles a
-            LEFT JOIN versions   v ON a.version_id  = v.id
+            LEFT JOIN versions v ON a.version_id = v.id
             LEFT JOIN categories c ON a.category_id = c.id
-            LEFT JOIN modules    m ON a.module_id   = m.id
+            LEFT JOIN modules m ON a.module_id = m.id
         WHERE a.status = 'published'
         ORDER BY a.updated_at DESC
             LIMIT 100
@@ -39,25 +45,26 @@ app.get("/api/articles", async (_req, res) => {
     res.json(rows);
 });
 
-// ---------- Article detail ----------
+// 🔍 Article detail
 app.get("/api/articles/:id", async (req, res) => {
     const [rows] = await pool.query(
         `SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
                 v.label AS version,
-                a.category_id, c.name AS category,
-                a.module_id,   m.name AS module
+                c.name AS category,
+                m.name AS module
          FROM articles a
-             LEFT JOIN versions   v ON a.version_id = v.id
+             LEFT JOIN versions v ON a.version_id = v.id
              LEFT JOIN categories c ON a.category_id = c.id
-             LEFT JOIN modules    m ON a.module_id   = m.id
+             LEFT JOIN modules m ON a.module_id = m.id
          WHERE a.id = ?`,
         [req.params.id]
     );
+
     if (!rows.length) return res.status(404).json({ error: "Not found" });
     res.json(rows[0]);
 });
 
-// ---------- Create article ----------
+// 📝 Create
 app.post("/api/articles", async (req, res) => {
     const {
         title,
@@ -84,32 +91,36 @@ app.post("/api/articles", async (req, res) => {
         const [rows] = await pool.query(
             `SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
                     v.label AS version,
-                    a.category_id, c.name AS category,
-                    a.module_id,   m.name AS module
+                    c.name AS category,
+                    m.name AS module
              FROM articles a
-                 LEFT JOIN versions   v ON a.version_id = v.id
+                 LEFT JOIN versions v ON a.version_id = v.id
                  LEFT JOIN categories c ON a.category_id = c.id
-                 LEFT JOIN modules    m ON a.module_id   = m.id
+                 LEFT JOIN modules m ON a.module_id = m.id
              WHERE a.id = ?`,
             [newId]
         );
 
-        res.status(201).location(`/api/articles/${newId}`).json(rows[0]);
+        res.status(201).json(rows[0]);
     } catch (err) {
-        if (err?.code === 'ER_NO_REFERENCED_ROW_2' || err?.errno === 1452) {
+        if (err?.errno === 1452)
             return res.status(400).json({ error: "FK inválida en version_id/category_id/module_id" });
-        }
+
         res.status(500).json({ error: "Error al crear", detail: String(err) });
     }
 });
 
-// ---------- Update (partial) ----------
+// 🛠 Update
 app.put("/api/articles/:id", async (req, res) => {
-    const allowed = ["title", "summary", "source_url", "version_id", "status", "category_id", "module_id"];
-    const fields = Object.keys(req.body || {}).filter((k) => allowed.includes(k));
+    const allowed = [
+        "title", "summary", "source_url",
+        "version_id", "status", "category_id", "module_id"
+    ];
+
+    const fields = Object.keys(req.body || {}).filter(k => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "Nada que actualizar" });
 
-    const setClause = fields.map((f) => `${f} = :${f}`).join(", ");
+    const setClause = fields.map(f => `${f} = :${f}`).join(", ");
     const params = { ...req.body, id: req.params.id };
 
     try {
@@ -117,43 +128,50 @@ app.put("/api/articles/:id", async (req, res) => {
             `UPDATE articles SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = :id`,
             params
         );
+
         if (r.affectedRows === 0) return res.status(404).json({ error: "Not found" });
 
         const [rows] = await pool.query(
             `SELECT a.id, a.title, a.summary, a.source_url, a.updated_at,
                     v.label AS version,
-                    a.category_id, c.name AS category,
-                    a.module_id,   m.name AS module
+                    c.name AS category,
+                    m.name AS module
              FROM articles a
-                 LEFT JOIN versions   v ON a.version_id = v.id
+                 LEFT JOIN versions v ON a.version_id = v.id
                  LEFT JOIN categories c ON a.category_id = c.id
-                 LEFT JOIN modules    m ON a.module_id   = m.id
+                 LEFT JOIN modules m ON a.module_id = m.id
              WHERE a.id = ?`,
             [req.params.id]
         );
+
         res.json(rows[0]);
     } catch (err) {
-        if (err?.code === 'ER_NO_REFERENCED_ROW_2' || err?.errno === 1452) {
+        if (err?.errno === 1452)
             return res.status(400).json({ error: "FK inválida en version_id/category_id/module_id" });
-        }
+
         res.status(500).json({ error: "Error al actualizar", detail: String(err) });
     }
 });
 
-// ---------- Delete ----------
+// 🗑 Delete
 app.delete("/api/articles/:id", async (req, res) => {
-    const [r] = await pool.execute(`DELETE FROM articles WHERE id = :id`, { id: req.params.id });
+    const [r] = await pool.execute(
+        `DELETE FROM articles WHERE id = :id`,
+        { id: req.params.id }
+    );
     if (r.affectedRows === 0) return res.status(404).json({ error: "Not found" });
     res.status(204).send();
 });
 
-// ---------- Categories ----------
+/* ============================================================
+   CATEGORIES, TAGS, FAQS
+   ============================================================ */
+
 app.get("/api/categories", async (_req, res) => {
     const [rows] = await pool.query("SELECT id, name, description FROM categories ORDER BY name");
     res.json(rows);
 });
 
-// ---------- Tags ----------
 app.get("/api/tags", async (_req, res) => {
     const [rows] = await pool.query("SELECT id, name FROM tags ORDER BY name");
     res.json(rows);
@@ -171,81 +189,100 @@ app.get("/api/articles/:id/tags", async (req, res) => {
     res.json(rows);
 });
 
-// ---------- FAQs ----------
 app.get("/api/faqs", async (req, res) => {
     const { article_id } = req.query;
     let sql = `SELECT id, question, answer, article_id, created_at FROM faqs`;
     const params = [];
-    if (article_id) { sql += " WHERE article_id = ?"; params.push(article_id); }
+
+    if (article_id) {
+        sql += " WHERE article_id = ?";
+        params.push(article_id);
+    }
+
     sql += " ORDER BY created_at DESC";
+
     const [rows] = await pool.query(sql, params);
     res.json(rows);
 });
 
-// ---------- AI Assistant ----------
-const client = new OpenAI({
-    apiKey: process.env.OPENAI_KEY
+/* ============================================================
+   AUTOCOMPLETE (Dynamic Suggestions from DB)
+   ============================================================ */
+
+app.get("/api/suggestions", async (req, res) => {
+    const q = (req.query.q || "").trim().toLowerCase();
+
+    if (q.length === 0) return res.json([]);
+
+    const [rows] = await pool.query(`
+        SELECT DISTINCT title
+        FROM articles
+        WHERE status = 'published'
+          AND (LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)
+            LIMIT 8
+    `, [`%${q}%`, `%${q}%`]);
+
+    res.json(rows.map(r => r.title));
 });
+
+/* ============================================================
+   AI — HUGO (Cognos-only Virtual Assistant)
+   ============================================================ */
+
+const client = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
 app.post("/ai/query", async (req, res) => {
     try {
         const { message } = req.body;
 
-        if (!message || message.trim() === "") {
+        if (!message || !message.trim()) {
             return res.status(400).json({ error: "Message is required" });
         }
 
-        // 1️⃣ Detectar idioma
-        const detection = await client.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-                {
-                    role: "system",
-                    content:
-                        "Detect the user's language. Respond ONLY with 'es' or 'en'."
-                },
-                {
-                    role: "user",
-                    content: message
-                }
-            ]
-        });
-
-        const lang = detection.choices?.[0]?.message?.content?.trim() === "en" ? "en" : "es";
-
-        // 2️⃣ Responder en ese idioma
         const completion = await client.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
                 {
                     role: "system",
                     content: `
-You are the official assistant of the Cognos Knowledge Hub.
+You are **Hugo**, a friendly and professional assistant specialized ONLY in Cognos Analytics.
 
-RULES:
-- Always respond ONLY in ${lang}.
-- Keep answers short, clear, and direct.
-- Be professional, friendly, and helpful.
-- If asked about Cognos / IBM / CKH / configuration issues, answer accurately.
-- Never switch languages unless the user switches.
-`
+LANGUAGE RULES
+- Always answer in the SAME language the user used in their LAST message.
+- If the user explicitly asks to switch languages (e.g. "speak English", "habla español"), then switch and continue in that language.
+- Do NOT mix languages in the same answer unless the user clearly asks you to.
+
+SCOPE RULES
+- You ONLY help with Cognos Analytics topics: XQE, dispatcher, gateway, content manager, CAF, JDBC/ODBC, namespaces, security, logging, reports, dashboards, data sources, configuration, installation, upgrades, performance, troubleshooting, architecture, etc.
+- If the question is clearly about something NOT related to Cognos (for example: viajes, comida, películas, clima, vida personal, etc.), answer:
+  "Lo siento, solo puedo ayudarte con temas relacionados a Cognos Analytics."
+- BUT if the user says something general like "I need help", "necesito ayuda", "I have a question", etc., assume they want help with Cognos and reply asking what issue they have with Cognos Analytics.
+
+IDENTITY
+- When the user asks who you are, briefly introduce yourself as Hugo, an assistant specialized in Cognos Analytics, using the same language the user is using.
+
+STYLE
+- Be clear, concise, friendly and practical.
+- When useful, provide step-by-step troubleshooting and mention relevant logs/config files or components.
+                    `
                 },
-                {
-                    role: "user",
-                    content: message
-                }
+                { role: "user", content: message }
             ]
         });
 
-        const reply = completion.choices?.[0]?.message?.content || "No response received";
-        res.json({ reply });
+        res.json({ reply: completion.choices[0].message.content });
 
     } catch (error) {
         console.error("AI Error:", error);
-        res.status(500).json({ error: "Error communicating with AI" });
+        res.status(500).json({ error: "Error communicating with Hugo" });
     }
 });
 
-// ---------- Start ----------
+/* ============================================================
+   START SERVER
+   ============================================================ */
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("API listening on http://localhost:" + PORT));
+app.listen(PORT, () =>
+    console.log(`API listening on http://localhost:${PORT}`)
+);
